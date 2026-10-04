@@ -1,0 +1,78 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --font-sans: "Inter", "Noto Sans Arabic", system-ui, sans-serif;
+}
+html[dir="rtl"] {
+  --font-sans: "Noto Sans Arabic", "Inter", system-ui, sans-serif;
+}
+
+@layer base {
+  html {
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+  }
+  body {
+    @apply bg-canvas text-ink;
+    font-feature-settings: "cv11", "ss01";
+  }
+  /* numbers align in tables and totals */
+  .tabular,
+  td,
+  input[type="number"] {
+    font-variant-numeric: tabular-nums;
+  }
+  /* hide native number spinners, we use our own affordances */
+  input[type="number"]::-webkit-outer-spin-button,
+  input[type="number"]::-webkit-inner-spin-button {
+    -webkit-appearance: none;
+    margin: 0;
+  }
+  input[type="number"] {
+    -moz-appearance: textfield;
+  }
+  ::selection {
+    @apply bg-brand-100 text-brand-900;
+  }
+}
+
+@layer components {
+  /* Zewin form field — shared by input, select, textarea, combobox trigger */
+  .zw-field {
+    @apply block w-full rounded-field border border-line-strong bg-white px-3 text-[14px] text-ink
+           placeholder:text-ink-faint transition-[border-color,box-shadow] duration-150
+           hover:border-ink-faint focus:border-brand-500 focus:shadow-focus focus:outline-none
+           disabled:cursor-not-allowed disabled:bg-canvas disabled:text-ink-muted;
+    height: 42px;
+  }
+  .zw-field[aria-invalid="true"] {
+    @apply border-red-400 focus:border-red-500;
+  }
+  .zw-field[aria-invalid="true"]:focus {
+    box-shadow: 0 0 0 4px rgba(239, 68, 68, 0.15);
+  }
+  /* native select with our own chevron (flips side in RTL) */
+  .zw-select {
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' fill='none' stroke='%236b7a82' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m4 6 4 4 4-4'/%3E%3C/svg%3E");
+    background-repeat: no-repeat;
+    background-position: right 0.75rem center;
+  }
+  [dir="rtl"] .zw-select {
+    background-position: left 0.75rem center;
+  }
+  .zw-card {
+    @apply rounded-card border border-line bg-white shadow-card;
+  }
+  .zw-scroll {
+    scrollbar-width: thin;
+    scrollbar-color: #cfd8dd transparent;
+  }
+}
+
+@media print {
+  .no-print {
+    display: none !important;
+  }
+}

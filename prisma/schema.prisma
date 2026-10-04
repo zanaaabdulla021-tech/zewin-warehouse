@@ -1,0 +1,428 @@
+// ZEWIN — Warehouse & Accounting
+// Full data model for every module. Phase 1 UI covers Dashboard + Warehouses;
+// the rest of the schema is in place so later phases only add screens.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+// Neon (serverless PostgreSQL)
+// DATABASE_URL  → pooled connection (…-pooler.…neon.tech)  used by the app
+// DIRECT_URL    → direct connection                       used by migrations
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+// ───────────────────────── Access control ─────────────────────────
+
+enum RoleKey {
+  SUPER_ADMIN
+  ADMIN
+  ACCOUNTING
+  WAREHOUSE_MANAGER
+  WAREHOUSE_EMPLOYEE
+}
+
+model Role {
+  id          String           @id @default(cuid())
+  key         RoleKey          @unique
+  name        String
+  description String?
+  permissions RolePermission[]
+  users       User[]
+  createdAt   DateTime         @default(now())
+  updatedAt   DateTime         @updatedAt
+}
+
+/// module: dashboard | warehouses | products | stock | documents | accounting | suppliers | reports | employees | settings
+/// action: view | create | edit | delete | verify | approve | export
+model RolePermission {
+  id     String @id @default(cuid())
+  roleId String
+  module String @db.VarChar(40)
+  action String @db.VarChar(20)
+  role   Role   @relation(fields: [roleId], references: [id], onDelete: Cascade)
+
+  @@unique([roleId, module, action])
+}
+
+model User {
+  id           String      @id @default(cuid())
+  name         String
+  email        String      @unique
+  phone        String?
+  passwordHash String?
+  avatarUrl    String?
+  locale       String      @default("en") @db.VarChar(5)
+  status       Status      @default(ACTIVE)
+  roleId       String
+  role         Role        @relation(fields: [roleId], references: [id])
+  warehouses   WarehouseEmployee[]
+  managedWarehouses Warehouse[] @relation("WarehouseManager")
+  auditLogs    AuditLog[]
+  createdDocs  Document[]  @relation("DocCreatedBy")
+  verifiedDocs Document[]  @relation("DocVerifiedBy")
+  verifications Verification[]
+  notifications Notification[]
+  /// notification channels the user wants (in-app is always on)
+  notifyEmail    Boolean   @default(true)
+  notifyWhatsApp Boolean   @default(false)
+  createdAt    DateTime    @default(now())
+  updatedAt    DateTime    @updatedAt
+}
+
+enum Status {
+  ACTIVE
+  INACTIVE
+  ARCHIVED
+}
+
+// ───────────────────────── Company / settings ─────────────────────────
+
+model Company {
+  id         String   @id @default(cuid())
+  name       String
+  legalName  String?
+  taxNumber  String?
+  phone      String?
+  email      String?
+  address    String?
+  currency   String   @default("USD") @db.VarChar(3)
+  logoUrl    String?
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+}
+
+/// Exchange rates against the company base currency (Company.currency).
+model Currency {
+  code      String   @id @db.VarChar(3)
+  name      String
+  symbol    String?  @db.VarChar(8)
+  /// how many units of the base currency one unit of this currency is worth
+  rate      Decimal  @default(1) @db.Decimal(18, 6)
+  active    Boolean  @default(true)
+  updatedAt DateTime @updatedAt
+}
+
+model Setting {
+  key       String   @id @db.VarChar(80)
+  value     Json
+  updatedAt DateTime @updatedAt
+}
+
+// ───────────────────────── Warehouses ─────────────────────────
+
+model Warehouse {
+  id          String   @id @default(cuid())
+  code        String   @unique @db.VarChar(20)
+  name        String
+  type        WarehouseType @default(MAIN)
+  city        String?
+  address     String?
+  phone       String?
+  capacity    Int?
+  notes       String?  @db.Text
+  status      Status   @default(ACTIVE)
+  managerId   String?
+  manager     User?    @relation("WarehouseManager", fields: [managerId], references: [id], onDelete: SetNull)
+  employees   WarehouseEmployee[]
+  stock       StockLevel[]
+  movements   StockMovement[]
+  documents   Document[] @relation("DocWarehouse")
+  transfersIn Document[] @relation("DocToWarehouse")
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([status])
+}
+
+enum WarehouseType {
+  MAIN
+  BRANCH
+  COLD_STORAGE
+  TRANSIT
+}
+
+model WarehouseEmployee {
+  warehouseId String
+  userId      String
+  position    String?
+  assignedAt  DateTime  @default(now())
+  warehouse   Warehouse @relation(fields: [warehouseId], references: [id], onDelete: Cascade)
+  user        User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@id([warehouseId, userId])
+}
+
+// ───────────────────────── Products ─────────────────────────
+
+model Category {
+  id       String     @id @default(cuid())
+  name     String     @unique
+  parentId String?
+  parent   Category?  @relation("CategoryTree", fields: [parentId], references: [id])
+  children Category[] @relation("CategoryTree")
+  products Product[]
+}
+
+model Unit {
+  id       String    @id @default(cuid())
+  name     String    @unique
+  symbol   String    @db.VarChar(10)
+  products Product[]
+}
+
+model Product {
+  id            String   @id @default(cuid())
+  code          String   @unique @db.VarChar(30)
+  barcode       String?  @unique @db.VarChar(64)
+  name          String
+  description   String?  @db.Text
+  categoryId    String?
+  unitId        String?
+  purchasePrice Decimal  @default(0) @db.Decimal(14, 2)
+  sellingPrice  Decimal  @default(0) @db.Decimal(14, 2)
+  taxRate       Decimal  @default(0) @db.Decimal(5, 2)
+  discountRate  Decimal  @default(0) @db.Decimal(5, 2)
+  minQuantity   Decimal  @default(0) @db.Decimal(14, 3)
+  tracksBatch   Boolean  @default(true)
+  tracksExpiry  Boolean  @default(true)
+  imageUrl      String?
+  notes         String?  @db.Text
+  status        Status   @default(ACTIVE)
+  category      Category? @relation(fields: [categoryId], references: [id], onDelete: SetNull)
+  unit          Unit?     @relation(fields: [unitId], references: [id], onDelete: SetNull)
+  batches       Batch[]
+  stock         StockLevel[]
+  movements     StockMovement[]
+  docItems      DocumentItem[]
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  @@index([name])
+}
+
+model Batch {
+  id         String    @id @default(cuid())
+  productId  String
+  number     String    @db.VarChar(60)
+  mfgDate    DateTime?
+  expiryDate DateTime?
+  product    Product   @relation(fields: [productId], references: [id], onDelete: Cascade)
+  stock      StockLevel[]
+  movements  StockMovement[]
+  docItems   DocumentItem[]
+  createdAt  DateTime  @default(now())
+
+  @@unique([productId, number])
+  @@index([expiryDate])
+}
+
+// ───────────────────────── Stock ─────────────────────────
+
+/// Current quantity per warehouse / product / batch.
+model StockLevel {
+  id          String    @id @default(cuid())
+  warehouseId String
+  productId   String
+  batchId     String?
+  quantity    Decimal   @default(0) @db.Decimal(14, 3)
+  warehouse   Warehouse @relation(fields: [warehouseId], references: [id], onDelete: Cascade)
+  product     Product   @relation(fields: [productId], references: [id], onDelete: Cascade)
+  batch       Batch?    @relation(fields: [batchId], references: [id], onDelete: SetNull)
+  updatedAt   DateTime  @updatedAt
+
+  @@unique([warehouseId, productId, batchId])
+}
+
+enum MovementType {
+  STOCK_IN
+  STOCK_OUT
+  TRANSFER_IN
+  TRANSFER_OUT
+  ADJUSTMENT
+  RETURN
+}
+
+model StockMovement {
+  id          String       @id @default(cuid())
+  type        MovementType
+  warehouseId String
+  productId   String
+  batchId     String?
+  quantity    Decimal      @db.Decimal(14, 3) // signed
+  unitCost    Decimal?     @db.Decimal(14, 2)
+  documentId  String?
+  /// groups the lines of one stock operation, e.g. SI-000012 / SO-… / TR-… / ADJ-…
+  reference   String?      @db.VarChar(40)
+  /// for transfers: the other warehouse involved
+  counterpartWarehouseId String?
+  note        String?
+  createdById   String?
+  createdByName String?
+  warehouse   Warehouse    @relation(fields: [warehouseId], references: [id])
+  product     Product      @relation(fields: [productId], references: [id])
+  batch       Batch?       @relation(fields: [batchId], references: [id])
+  document    Document?    @relation(fields: [documentId], references: [id], onDelete: SetNull)
+  createdAt   DateTime     @default(now())
+
+  @@index([warehouseId, createdAt])
+  @@index([productId, createdAt])
+  @@index([reference])
+}
+
+// ───────────────────────── Suppliers ─────────────────────────
+
+model Supplier {
+  id          String     @id @default(cuid())
+  code        String     @unique @db.VarChar(20)
+  name        String
+  contactName String?
+  phone       String?
+  email       String?
+  city        String?
+  address     String?
+  taxNumber   String?
+  notes       String?    @db.Text
+  status      Status     @default(ACTIVE)
+  documents   Document[]
+  createdAt   DateTime   @default(now())
+  updatedAt   DateTime   @updatedAt
+}
+
+// ───────────────────────── Documents ─────────────────────────
+
+enum DocumentType {
+  PURCHASE
+  TRANSFER
+  STOCK_IN
+  STOCK_OUT
+  ADJUSTMENT
+  RETURN
+  OTHER
+}
+
+enum DocumentStatus {
+  DRAFT
+  PENDING        // waiting for accounting verification
+  PROCESSING
+  VERIFIED
+  REJECTED
+  ARCHIVED
+}
+
+model Document {
+  id              String         @id @default(cuid())
+  number          String         @unique @db.VarChar(30) // DOC-000125
+  type            DocumentType
+  status          DocumentStatus @default(DRAFT)
+  date            DateTime
+  referenceNumber String?
+  warehouseId     String
+  toWarehouseId   String?
+  supplierId      String?
+  subtotal        Decimal        @default(0) @db.Decimal(14, 2)
+  discountTotal   Decimal        @default(0) @db.Decimal(14, 2)
+  taxTotal        Decimal        @default(0) @db.Decimal(14, 2)
+  grandTotal      Decimal        @default(0) @db.Decimal(14, 2)
+  /// document currency and the rate to the base currency at the time of the document
+  currency        String         @default("USD") @db.VarChar(3)
+  exchangeRate    Decimal        @default(1) @db.Decimal(18, 6)
+  /// grandTotal converted to the base currency — used by reports and dashboards
+  grandTotalBase  Decimal        @default(0) @db.Decimal(14, 2)
+  notes           String?        @db.Text
+  createdById     String
+  verifiedById    String?
+  verifiedAt      DateTime?
+  submittedAt     DateTime?
+  /// stock reference created when the document was posted (Phase 5: on verification)
+  stockReference  String?        @db.VarChar(40)
+  warehouse       Warehouse      @relation("DocWarehouse", fields: [warehouseId], references: [id])
+  toWarehouse     Warehouse?     @relation("DocToWarehouse", fields: [toWarehouseId], references: [id])
+  supplier        Supplier?      @relation(fields: [supplierId], references: [id])
+  createdBy       User           @relation("DocCreatedBy", fields: [createdById], references: [id])
+  verifiedBy      User?          @relation("DocVerifiedBy", fields: [verifiedById], references: [id])
+  items           DocumentItem[]
+  verifications   Verification[]
+  movements       StockMovement[]
+  createdAt       DateTime       @default(now())
+  updatedAt       DateTime       @updatedAt
+
+  @@index([status, date])
+  @@index([type, date])
+}
+
+model DocumentItem {
+  id           String   @id @default(cuid())
+  documentId   String
+  productId    String
+  batchId      String?
+  batchNumber  String?  @db.VarChar(60)
+  expiryDate   DateTime?
+  quantity     Decimal  @db.Decimal(14, 3)
+  unitPrice    Decimal  @db.Decimal(14, 2)
+  discount     Decimal  @default(0) @db.Decimal(14, 2)
+  taxRate      Decimal  @default(0) @db.Decimal(5, 2)
+  lineTotal    Decimal  @db.Decimal(14, 2)
+  position     Int      @default(0)
+  document     Document @relation(fields: [documentId], references: [id], onDelete: Cascade)
+  product      Product  @relation(fields: [productId], references: [id])
+  batch        Batch?   @relation(fields: [batchId], references: [id])
+}
+
+// ───────────────────────── Accounting verification ─────────────────────────
+
+enum VerificationResult {
+  VERIFIED
+  REJECTED
+}
+
+model Verification {
+  id         String             @id @default(cuid())
+  documentId String
+  userId     String
+  result     VerificationResult
+  checklist  Json               // { documentNumber: true, warehouse: true, ... }
+  notes      String?            @db.Text
+  reason     String?            @db.Text // required when REJECTED
+  document   Document           @relation(fields: [documentId], references: [id], onDelete: Cascade)
+  user       User               @relation(fields: [userId], references: [id])
+  createdAt  DateTime           @default(now())
+}
+
+// ───────────────────────── Audit log ─────────────────────────
+
+model AuditLog {
+  id        String   @id @default(cuid())
+  userId    String?
+  userName  String   // denormalised so logs survive user deletion
+  action    String   @db.VarChar(30) // created | edited | deleted | verified | rejected | exported ...
+  module    String   @db.VarChar(40)
+  recordId  String?
+  recordRef String?  // human reference, e.g. WH-001
+  details   Json?
+  user      User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
+  createdAt DateTime @default(now())
+
+  @@index([module, createdAt])
+  @@index([createdAt])
+}
+
+// ───────────────────────── Notifications ─────────────────────────
+
+model Notification {
+  id        String    @id @default(cuid())
+  userId    String
+  /// doc_submitted | doc_verified | doc_rejected
+  type      String    @db.VarChar(40)
+  title     String
+  body      String?
+  link      String?
+  readAt    DateTime?
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  createdAt DateTime  @default(now())
+
+  @@index([userId, readAt])
+}
